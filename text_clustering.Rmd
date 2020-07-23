@@ -1,0 +1,180 @@
+---
+title: "text_clustering"
+author: "Soyoung Choi"
+date: "7/22/2020"
+output: html_document
+---
+# Required packages
+library(ezpickr)
+library(tm)         
+library(RWeka)      
+library(dendextend)
+library(cluster)   
+library(clValid) 
+
+# Upload text data
+```{r}
+df <- pick("sy.xlsx")
+```
+
+# Select the interest variable; ABSTRACT_TEXT
+```{r}
+corpus <- Corpus(VectorSource(df$ABSTRACT_TEXT))
+```
+
+# Create a corpus cleaning function
+```{r}
+clean_corpus <- function(corpus){
+  corpus = tm_map(corpus, stripWhitespace) 
+  corpus = tm_map(corpus, removePunctuation) 
+  corpus = tm_map(corpus, removeNumbers)
+  corpus = tm_map(corpus, content_transformer(tolower))
+  corpus = tm_map(corpus, removeWords, c(stopwords("en")))
+  corpus = tm_map(corpus, stemDocument)
+  return(corpus)
+}
+```
+
+# Apply the cleaning function to our corpus
+```{r}
+clean_corp <- clean_corpus(corpus)
+```
+
+# Create a Document Term Matrix
+```{r}
+DTM <- DocumentTermMatrix(clean_corp)
+```
+
+# Remove sparse terms from the corpus
+```{r}
+DTM <- removeSparseTerms(DTM, 0.9)
+```
+
+# Create histograms and boxplots
+```{r}
+dtms <- as.matrix(DTM)
+dtms_freq <- as.matrix(rowSums(dtms))
+dtms_freq1 <- dtms_freq[order(dtms_freq),]
+sd <- sd(dtms_freq)
+mean <- mean(dtms_freq)
+
+par(mfrow = c(1,1))
+hist(dtms_freq,
+     main = "Histogram",
+     col = "green",
+     col.main = "dodgerblue")
+boxplot(dtms_freq, 
+        main = "Boxplot", 
+        col = "green",
+        col.main = "dodgerblue")
+```
+
+# Convert a DTM to matrix
+```{r}
+DTM_m <- as.matrix(DTM)
+```
+
+# Normalize each document
+```{r}
+for (i in 1:length(clean_corp)) {
+  DTM_m[i,] = as.matrix(DTM_m[i,])/norm(as.matrix(DTM_m[i,]), type ="F")
+}
+```
+
+# Caclculate distances between files
+```{r}
+dist_uni = dist(DTM_m, method = "euclidian")
+hclust_dist <- as.dist(dist_uni)
+hclust_dist[is.na(hclust_dist)] <- 0
+hclust_dist[is.nan(hclust_dist)] <- 0
+sum(is.infinite(hclust_dist)) # This should be 0.
+```
+
+# Cluster using "ward.D" method
+```{r}
+hc_uni = hclust(hclust_dist, method="ward.D")
+hc_uni_d = as.dendrogram(hc_uni)
+```
+
+# Find the optimal number of clusters using Dunn Index
+```{r}
+k = 50
+mat = matrix(0, nrow = k, ncol = 2, byrow = TRUE)
+for (i in 1:k) {
+  members = cutree(hc_uni, i)
+  dunn_index = dunn(clusters = members, Data = hclust_dist)
+  mat[i,1] = i
+  mat[i,2] = dunn_index
+}
+```
+
+# Find the number of cluster by using Dunn Index
+```{r}
+plot(mat, 
+     type = 'b',
+     xlab = "Number of Cluster", 
+     ylab = "Dunn Index",
+     pch = 16,
+     col = "red",
+     main = "Optimal Number of Clusters",
+     col.main = "dodgerblue")
+points(mat, col = "green")
+```
+
+# Dendgrogram
+```{r}
+plot(hc_uni_d, main = "Hierarchical Clustering Dendrogram",leaflab = "none", col.main = "dodgerblue")
+
+# Adding cluster rectangles 
+ncl = 10
+rect.dendrogram(hc_uni_d, k = ncl, border = "red", xpd = FALSE, lower_rect = 0)
+
+clward1 = as.data.frame(cutree(hc_uni_d, ncl))
+```
+
+# Create a list of clusters with their files
+```{r}
+ncl = 10
+
+cl = list()
+for (i in 1:ncl) {
+  cl[paste("cl_",i, sep = "")] = list(rownames(subset(clward1, clward1 == i)))
+}
+
+cl
+summary(cl)
+```
+
+# Create corpuses for each cluster
+```{r}
+for (i in 1:ncl) {
+  name = paste("cl_corp_", i, sep = "")
+  assign(name, clean_corp[match(cl[[i]], names(clean_corp))])
+} 
+
+Tdm = list()
+```
+
+# Create a list of TDMs for each cluster
+```{r}
+for (i in 1:ncl) {
+  bigram_dtm_i = TermDocumentMatrix(get(paste("cl_corp_",i,sep="")))
+  tdm_i <- as.matrix(bigram_dtm_i)
+  Tdm[paste("cluster_",i,sep="")] = list(tdm_i)
+}
+```
+
+# Most common words in each cluster
+```{r}
+par(mfrow = c(1,2))
+for (i in 1:ncl) {
+  cl_m = as.matrix(Tdm[[i]])
+  barplot(sort(sort(rowSums(cl_m), decreasing = TRUE)[1:10], decreasing = FALSE),
+          las = 2,
+          horiz = TRUE,
+          decreasing = FALSE, 
+          main = paste("Most common words for cluster", i, sep = " "),
+          cex.main = 0.8,
+          cex.names = 0.8,
+          col.main = "dodgerblue")}
+```
